@@ -165,7 +165,7 @@ exportCohortStatsTables <- function(connectionDetails,
 
 addSubsetColumns <- function(cohortDefinitionSet) {
   if (nrow(cohortDefinitionSet) > 0 & !hasSubsetDefinitions(cohortDefinitionSet)) {
-    cohortDefinitionSet$isSubset <- FALSE
+    cohortDefinitionSet$isSubset <- 0
     cohortDefinitionSet$subsetDefinitionId <- NA
     cohortDefinitionSet$subsetParent <- cohortDefinitionSet$cohortId
   }
@@ -175,7 +175,7 @@ addSubsetColumns <- function(cohortDefinitionSet) {
 
 addTemplateColumns <- function(cohortDefinitionSet) {
   if (nrow(cohortDefinitionSet) > 0 & !hasTemplateDefinitions(cohortDefinitionSet)) {
-    cohortDefinitionSet$isTemplatedCohort <- FALSE
+    cohortDefinitionSet$isTemplatedCohort <- 0
   }
   
   return(cohortDefinitionSet)
@@ -185,17 +185,24 @@ exportCohortDefinitionSet <- function(outputFolder, cohortDefinitionSet = NULL) 
   cohortDefinitions <- createEmptyResult("cg_cohort_definition")
   cohortSubsets <- createEmptyResult("cg_cohort_subset_definition")
   cohortTemplates <- createEmptyResult("cg_cohort_template_definition")
+  cohortTemplateLink <- createEmptyResult("cg_cohort_template_link")
   if (!is.null(cohortDefinitionSet)) {
 
     templateDefinitions <- getTemplateDefinitions(cohortDefinitionSet)
     if (length(templateDefinitions) > 0) {
       for (template in templateDefinitions) {
         row <- data.frame(
-          templateDefinitionId = template$id,
-          json = template$toJson() |> as.character()
+          templateDefinitionId = template$getChecksum(),
+          json = template$toJson() |> as.character(),
+          templateName = template$name,
+          templateSql = template$templateSql
         )
         cohortTemplates <- dplyr::bind_rows(cohortTemplates, row)
+        linkRows <- data.frame(templateDefinitionId = template$getChecksum(),
+                               cohortDefinitionId = template$references$cohortId)
+        cohortTemplateLink <- dplyr::bind_rows(cohortTemplateLink, linkRows)
       }
+      cohortDefinitionSet$isTemplatedCohort <- as.integer(cohortDefinitionSet$isTemplatedCohort)
     } else {
       cohortDefinitionSet <- cohortDefinitionSet |> addTemplateColumns()
     }
@@ -203,7 +210,7 @@ exportCohortDefinitionSet <- function(outputFolder, cohortDefinitionSet = NULL) 
     cdsCohortSubsets <- getSubsetDefinitions(cohortDefinitionSet)
     if (length(cdsCohortSubsets) > 0) {
       for (i in seq_along(cdsCohortSubsets)) {
-        cohortSubsets <- rbind(
+        cohortSubsets <- dplyr::bind_rows(
           cohortSubsets,
           data.frame(
             subsetDefinitionId = cdsCohortSubsets[[i]]$definitionId,
@@ -211,6 +218,7 @@ exportCohortDefinitionSet <- function(outputFolder, cohortDefinitionSet = NULL) 
           )
         )
       }
+      cohortDefinitionSet$isSubset <- as.integer(cohortDefinitionSet$isSubset)
     } else {
       cohortDefinitionSet <- cohortDefinitionSet |> addSubsetColumns()
     }
@@ -237,19 +245,51 @@ exportCohortDefinitionSet <- function(outputFolder, cohortDefinitionSet = NULL) 
     x = cohortTemplates,
     file = file.path(outputFolder, "cg_cohort_template_definition.csv")
   )
+
+  writeCsv(
+    x = cohortTemplateLink,
+    file = file.path(outputFolder, "cg_cohort_template_link.csv")
+  )
 }
 
 createEmptyResult <- function(tableName) {
   columns <- readCsv(
     file = system.file("csv", "resultsDataModelSpecification.csv", package = "CohortGenerator")
-  ) %>%
-    dplyr::filter(.data$tableName == !!tableName) %>%
-    dplyr::pull(.data$columnName) %>%
-    SqlRender::snakeCaseToCamelCase()
-  result <- vector(length = length(columns))
-  names(result) <- columns
-  result <- tibble::as_tibble(t(result), name_repair = "check_unique")
+  ) |>
+    dplyr::filter(.data$tableName == !!tableName)
+
+  # Initialize an empty list to hold columns
+  resultList <- list()
+  
+  # Loop through each column info to create a strongly typed empty column
+  for (i in seq_len(nrow(columns))) {
+    colName <- SqlRender::snakeCaseToCamelCase(columns$columnName[i])
+    dataType <- columns$dataType[i]
+    
+    # Map data types to R types
+    colValue <- switch(tolower(dataType),
+                       "bigint" = as.numeric(NA),
+                       "varchar" = as.character(NA),
+                       "text" = as.character(NA),
+                       "int" = as.integer(NA),
+                       "timestamp" = as.POSIXct(NA))
+    
+    # Fallback when no data type is found
+    if (is.null(colValue)) {
+      warning(paste(colName, "has data type", tolower(dataType), "which was not converted."))
+      colValue <- as.character(NA)
+    }
+    
+    # Assign to list
+    resultList[[colName]] <- colValue
+  }  
+  
+  # Convert list to tibble
+  result <- tibble::as_tibble(resultList)
+  
+  # Ensure zero rows
   result <- result[FALSE,]
+  
   return(result)
 }
 
