@@ -365,13 +365,9 @@ test_that("Export cohort stats using cohortDefinitionSet for inclusion rule name
   # Verify the files are written to the file system and that
   # the cohort inclusion information has been written
   exportedFiles <- list.files(path = cohortStatsFolder, pattern = ".csv", full.names = TRUE)
-  expect_true("cohortInclusion.csv" %in% basename(exportedFiles))
-  for (i in 1:length(exportedFiles)) {
-    if (basename(exportedFiles[i]) == "cohortInclusion.csv") {
-      data <- CohortGenerator:::.readCsv(file = exportedFiles[i])
-      expect_true(nrow(data) > 0)
-    }
-  }
+  expect_true("cohort_inclusion.csv" %in% basename(exportedFiles))
+  data <- .readCsv(file = file.path(cohortStatsFolder, "cohort_inclusion.csv"))
+  expect_true(nrow(data) > 0)
   unlink(cohortStatsFolder)
 })
 
